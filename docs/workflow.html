@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<title>OneApply - MVP Workflow</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 1200px; margin: 40px auto; padding: 0 20px; background: #fafafa; }
+  h1 { text-align: center; color: #1a1a2e; }
+  h2 { text-align: center; color: #555; font-weight: normal; margin-top: -10px; }
+  .diagram-section { background: white; border-radius: 12px; padding: 30px; margin: 30px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .diagram-section h3 { color: #1a1a2e; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<h1>OneApply - MVP Workflow</h1>
+<h2>One click to reach any recruiter</h2>
+
+<div class="diagram-section">
+<h3>1. Complete User Flow (with Approval Gate)</h3>
+<pre class="mermaid">
+flowchart TD
+    A["User visits recruiter's\nLinkedIn profile"] --> B["Clicks 'Reach Out'\nin Chrome Extension"]
+    B --> C["Extension reads visible\nprofile data from DOM"]
+    C --> D["Popup: recruiter info,\nJD paste box, resume picker"]
+    D --> E["User pastes JD\n& clicks 'Draft'"]
+    E --> F["POST /api/outreach/draft"]
+
+    F --> G{"Daily rate limit\n(3/day)?"}
+    G -->|Exceeded| H["Error: quota"]
+    G -->|OK| CASCADE["Run Email Cascade\n(see diagram 6)"]
+
+    CASCADE -->|Not found| M["Error:\nemail_not_found"]
+    CASCADE -->|Found| N["LLM: draft email\n+ pick best resume"]
+
+    N --> O["Create outreach row\nstatus=pending_approval"]
+    O --> P["Return draft to\nextension"]
+    P --> Q["Popup shows draft:\nsubject + body editable"]
+
+    Q --> R{"User action"}
+    R -->|Cancel| S["POST /api/outreach/:id/cancel\nstatus=cancelled"]
+    R -->|Approve/Edit + Send| T["POST /api/outreach/:id/approve"]
+
+    T --> U["Gmail API: send email\n(with edits if any)"]
+    U --> V["Update outreach:\nstatus=sent, thread_id"]
+    V --> W["Extension: success toast\nDashboard: row appears"]
+
+    style A fill:#4CAF50,color:#fff,stroke:#388E3C
+    style B fill:#2196F3,color:#fff,stroke:#1976D2
+    style H fill:#f44336,color:#fff,stroke:#d32f2f
+    style M fill:#f44336,color:#fff,stroke:#d32f2f
+    style S fill:#9E9E9E,color:#fff,stroke:#616161
+    style W fill:#4CAF50,color:#fff,stroke:#388E3C
+    style CASCADE fill:#FF9800,color:#fff,stroke:#F57C00
+    style N fill:#009688,color:#fff,stroke:#00796B
+    style Q fill:#FFC107,color:#000,stroke:#FFA000
+    style U fill:#9C27B0,color:#fff,stroke:#7B1FA2
+</pre>
+</div>
+
+<div class="diagram-section">
+<h3>2. Background Worker - Reply Tracking</h3>
+<pre class="mermaid">
+flowchart TD
+    W1["Background Worker\n(runs every 5 min)"] --> W2["Poll Gmail API for\nnew replies on sent threads"]
+    W2 --> W3{"New reply\nfound?"}
+    W3 -->|No| W1
+    W3 -->|Yes| W4["Update outreach record\nin PostgreSQL\n(status → replied)"]
+    W4 --> W5["Update Google Sheet row\n(Status, Response Date,\nResponse Summary)"]
+    W5 --> W6["Send browser notification\nto user"]
+    W6 --> W1
+
+    style W1 fill:#607D8B,color:#fff,stroke:#455A64
+    style W6 fill:#4CAF50,color:#fff,stroke:#388E3C
+</pre>
+</div>
+
+<div class="diagram-section">
+<h3>3. System Architecture</h3>
+<pre class="mermaid">
+flowchart LR
+    subgraph Clients["Clients (shared React codebase)"]
+        EXT["Chrome Extension\n(Manifest V3 + React)"]
+        DASH["Web Dashboard\n(React SPA)"]
+    end
+
+    subgraph Backend["Go Backend (Chi Router)"]
+        API["REST API + SSE"]
+        SVC["Service Layer\n(Business Logic)"]
+        INT["Interfaces\n(Ports)"]
+        WRK["Workers (goroutines)\n- Gmail poll (5m)\n- Follow-ups (1h)\n- Verify refresh (nightly)"]
+    end
+
+    subgraph Cascade["Email Cascade (Pillar 1)"]
+        DOM["DomainResolver"]
+        PAT["PatternGenerator"]
+        VER["EmailVerifier\n(SMTP)"]
+        APO["Apollo API\n(fallback)"]
+    end
+
+    subgraph External["External Services"]
+        GMAIL["Gmail API"]
+        LLM["Claude API"]
+        PUSH["Browser Push\n(via extension SW)"]
+    end
+
+    subgraph Storage
+        PG["PostgreSQL\nusers · companies\ncontacts · resumes\noutreach · replies\nnotifications · config"]
+    end
+
+    EXT -->|"REST + SSE\n(JWT)"| API
+    DASH -->|"REST + SSE\n(JWT)"| API
+    API --> SVC
+    SVC --> INT
+    INT --> DOM
+    INT --> PAT
+    INT --> VER
+    INT --> APO
+    INT --> GMAIL
+    INT --> LLM
+    INT --> PUSH
+    SVC --> PG
+    WRK --> GMAIL
+    WRK --> PG
+    WRK --> PUSH
+    APO -.->|"cache"| PG
+    VER -.->|"cache"| PG
+
+    style EXT fill:#2196F3,color:#fff,stroke:#1976D2
+    style DASH fill:#00BCD4,color:#fff,stroke:#0097A7
+    style API fill:#3F51B5,color:#fff,stroke:#303F9F
+    style SVC fill:#3F51B5,color:#fff,stroke:#303F9F
+    style INT fill:#3F51B5,color:#fff,stroke:#303F9F
+    style WRK fill:#3F51B5,color:#fff,stroke:#303F9F
+    style PG fill:#FF9800,color:#fff,stroke:#F57C00
+    style APO fill:#9C27B0,color:#fff,stroke:#7B1FA2
+    style GMAIL fill:#f44336,color:#fff,stroke:#d32f2f
+    style LLM fill:#009688,color:#fff,stroke:#00796B
+    style PUSH fill:#4CAF50,color:#fff,stroke:#388E3C
+</pre>
+</div>
+
+<div class="diagram-section">
+<h3>4. Follow-Up Service</h3>
+<p style="color:#555; margin-bottom:20px;">Automatically sends follow-up emails if no response after 3 days. Max 3 follow-ups per recruiter, then marks as "no_response".</p>
+<pre class="mermaid">
+flowchart TD
+    F1["Follow-Up Worker\n(runs every hour)"] --> F2["Query outreach table:\nstatus = 'sent' OR 'followed_up'\nAND last_contact > 3 days ago\nAND follow_up_count < 3"]
+    F2 --> F3{"Found outreach\nrecords?"}
+    F3 -->|No| F1
+    F3 -->|Yes| F4["For each record:"]
+
+    F4 --> F5{"Check Gmail:\nany reply on\nthis thread?"}
+    F5 -->|Yes| F6["Update status → 'replied'\nSkip follow-up\nUpdate Google Sheet"]
+    F5 -->|No| F7["Generate follow-up\nemail via LLM"]
+
+    F7 --> F8["LLM drafts follow-up\nbased on:\n- Original email\n- Follow-up number (1/2/3)\n- JD context"]
+    F8 --> F9["Send follow-up via\nGmail API\n(same thread)"]
+    F9 --> F10["Update PostgreSQL:\nfollow_up_count += 1\nlast_followed_up_at = now()\nstatus = 'followed_up'"]
+    F10 --> F11["Update Google Sheet:\nStatus, Follow-up Count,\nLast Follow-up Date"]
+    F11 --> F12{"follow_up_count\n= 3?"}
+    F12 -->|No| F1
+    F12 -->|Yes| F13["Update status →\n'no_response'\n(stop following up)"]
+    F13 --> F1
+
+    F6 --> F1
+
+    style F1 fill:#607D8B,color:#fff,stroke:#455A64
+    style F6 fill:#4CAF50,color:#fff,stroke:#388E3C
+    style F7 fill:#2196F3,color:#fff,stroke:#1976D2
+    style F9 fill:#9C27B0,color:#fff,stroke:#7B1FA2
+    style F13 fill:#f44336,color:#fff,stroke:#d32f2f
+</pre>
+</div>
+
+<div class="diagram-section">
+<h3>5. Follow-Up Timeline</h3>
+<pre class="mermaid">
+gantt
+    title Follow-Up Schedule per Recruiter
+    dateFormat  YYYY-MM-DD
+    axisFormat  Day %e
+
+    section Outreach
+    Initial Email Sent       :milestone, m1, 2026-05-16, 0d
+    Wait 3 days              :wait1, 2026-05-16, 3d
+
+    section Follow-up 1
+    Follow-up 1 Sent         :milestone, m2, 2026-05-19, 0d
+    Wait 3 days              :wait2, 2026-05-19, 3d
+
+    section Follow-up 2
+    Follow-up 2 Sent         :milestone, m3, 2026-05-22, 0d
+    Wait 3 days              :wait3, 2026-05-22, 3d
+
+    section Follow-up 3
+    Follow-up 3 (Final)      :milestone, m4, 2026-05-25, 0d
+    Marked as No Response    :crit, done1, 2026-05-25, 1d
+</pre>
+</div>
+
+<div class="diagram-section">
+<h3>6. Email Finder — Cascade (Cache → Pattern+Verify → Apollo)</h3>
+<pre class="mermaid">
+flowchart TD
+    R1["Input: name, company,\nlinkedin_url"] --> R2{"Cache hit in\ncontacts table?"}
+    R2 -->|"Yes (deliverable)"| RET["Return email\n[source=cache]"]
+    R2 -->|"No"| R3["DomainResolver:\ncompany → domain"]
+
+    R3 --> R4["PatternGenerator:\nfirst.last@d, flast@d,\nfirst@d, ... (~8 formats)"]
+    R4 --> R5["For each candidate:\nSMTP verify\n(MX + RCPT)"]
+
+    R5 --> R6{"Any deliverable?"}
+    R6 -->|"Yes"| R7["Cache in contacts\n[source=pattern,\nstatus=deliverable]"]
+    R7 --> RET
+
+    R6 -->|"No"| R8["Apollo API\n(fallback)"]
+    R8 --> R9{"Apollo returned\nemail?"}
+    R9 -->|"Yes"| R10["Verify Apollo email"]
+    R10 --> R11["Cache in contacts\n[source=apollo]"]
+    R11 --> RET
+
+    R9 -->|"No"| ERR["Return\nemail_not_found"]
+
+    style R1 fill:#2196F3,color:#fff,stroke:#1976D2
+    style RET fill:#4CAF50,color:#fff,stroke:#388E3C
+    style R7 fill:#FF9800,color:#fff,stroke:#F57C00
+    style R11 fill:#9C27B0,color:#fff,stroke:#7B1FA2
+    style ERR fill:#f44336,color:#fff,stroke:#d32f2f
+</pre>
+</div>
+
+<div class="diagram-section">
+<h3>7. Dashboard — Surfaces Map</h3>
+<pre class="mermaid">
+flowchart LR
+    subgraph EXT["Chrome Extension"]
+        E1["Capture<br/>(LinkedIn DOM read)"]
+        E2["Draft & Approve"]
+        E3["Recent outreach<br/>(last 5)"]
+        E4["Reply badge"]
+    end
+
+    subgraph WEB["Web Dashboard"]
+        W1["Outreach table<br/>(filters, search)"]
+        W2["Inbox<br/>(threaded replies)"]
+        W3["Analytics<br/>(sent, reply rate, chart)"]
+        W4["Contacts<br/>(source, verification)"]
+        W5["Resumes<br/>(upload, label)"]
+        W6["Settings<br/>(Gmail, quota, cadence)"]
+    end
+
+    subgraph API["Go Backend"]
+        A1["/api/outreach*"]
+        A2["/api/contacts*"]
+        A3["/api/resumes*"]
+        A4["/api/analytics"]
+        A5["/api/notifications + SSE"]
+        A6["/api/settings"]
+        A7["/api/auth/google"]
+    end
+
+    E1 --> A1
+    E2 --> A1
+    E3 --> A1
+    E4 --> A5
+    W1 --> A1
+    W2 --> A1
+    W2 --> A5
+    W3 --> A4
+    W4 --> A2
+    W5 --> A3
+    W6 --> A6
+    EXT --> A7
+    WEB --> A7
+
+    style EXT fill:#2196F3,color:#fff,stroke:#1976D2
+    style WEB fill:#00BCD4,color:#fff,stroke:#0097A7
+    style API fill:#3F51B5,color:#fff,stroke:#303F9F
+</pre>
+</div>
+
+<script>
+mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+        fontSize: '14px',
+        fontFamily: 'Arial'
+    },
+    flowchart: {
+        useMaxWidth: true,
+        htmlLabels: true,
+        curve: 'basis'
+    }
+});
+</script>
+</body></html>

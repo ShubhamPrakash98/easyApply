@@ -1,0 +1,16 @@
+{
+  "name": "oneapply",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev:extension": "pnpm --filter @oneapply/extension dev",
+    "dev:dashboard": "pnpm --filter @oneapply/dashboard dev",
+    "build:extension": "pnpm --filter @oneapply/extension build",
+    "build:dashboard": "pnpm --filter @oneapply/dashboard build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

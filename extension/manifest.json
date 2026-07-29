@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "OneApply",
+  "version": "0.0.1",
+  "description": "One click to reach any recruiter.",
+  "action": {
+    "default_popup": "src/popup/index.html",
+    "default_title": "OneApply"
+  },
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/in/*"],
+      "js": ["src/content/index.ts"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["storage", "notifications", "activeTab"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "http://localhost:8080/*"
+  ],
+  "icons": {
+    "16": "public/icon-16.png",
+    "48": "public/icon-48.png",
+    "128": "public/icon-128.png"
+  }
+}

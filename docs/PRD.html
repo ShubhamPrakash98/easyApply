@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>OneApply PRD</title></head>
+<body style="font-family: Arial, sans-serif; max-width: 820px; margin: 40px auto; line-height: 1.6;">
+
+<h1>OneApply — Technical PRD (MVP)</h1>
+<p><em>Updated July 29, 2026 | MVP | Shubham</em></p>
+<p><strong>Positioning:</strong> Apollo.io, but for job seekers instead of sales reps.</p>
+<hr>
+
+<h2>1. What is OneApply?</h2>
+<p>A Chrome extension + web dashboard that lets job seekers find, contact, and track recruiters. From a recruiter's LinkedIn profile: extract email (cache → pattern+verify → Apollo), draft a personalized email with the user's JD + best-matching resume, get user approval, send via Gmail, and monitor everything from an Apollo-style dashboard.</p>
+<p><strong>Core value:</strong> Better, more personalized recruiter outreach — with full visibility into who replied and who didn't.</p>
+
+<h2>2. The Five Pillars</h2>
+<ol>
+<li><strong>Email extraction from profile</strong> — cascade: <em>PostgreSQL cache → pattern generation + verification → Apollo fallback</em>.</li>
+<li><strong>Automated email drafting with JD context → user approval → send</strong> — LLM drafts, user approves/edits, Gmail sends. No silent sending.</li>
+<li><strong>Email tracking</strong> — every outreach persisted in Postgres, visible in the dashboard with status filters.</li>
+<li><strong>Follow-up mailing on no response</strong> — background worker sends up to 3 AI-generated follow-ups every 3 days on the same thread.</li>
+<li><strong>Notification system on response</strong> — Gmail polling detects replies → browser push + extension badge + dashboard inbox update.</li>
+</ol>
+
+<h2>3. Surfaces</h2>
+<p>Two UI surfaces from one shared React codebase:</p>
+<ul>
+<li><strong>Chrome extension (Manifest V3)</strong> — capture + approve + notify. Runs on LinkedIn profile pages.</li>
+<li><strong>Web dashboard (React SPA)</strong> — monitor + configure. Apollo-style tables, inbox, analytics, resume manager, settings.</li>
+</ul>
+
+<h2>4. How It Works (End-to-End)</h2>
+<ol>
+<li>User visits a recruiter's LinkedIn profile.</li>
+<li>Clicks "Reach Out" in the extension.</li>
+<li>Extension reads name, headline, company, linkedin_url from the DOM.</li>
+<li>User pastes the JD and picks (or lets AI pick) a resume variant.</li>
+<li>Backend runs the <strong>email cascade</strong>: cache → domain resolve + pattern generate + verify → Apollo. Returns email + confidence.</li>
+<li>Backend calls LLM to draft the email (recruiter context + JD + chosen resume).</li>
+<li>Extension shows the draft to the user with <strong>Approve / Edit / Cancel</strong>.</li>
+<li>On approve, backend sends via Gmail API, persists outreach record with status <code>sent</code>.</li>
+<li>Every 5 min, <strong>reply worker</strong> polls Gmail; on reply → status <code>replied</code> → push notification + SSE to dashboard.</li>
+<li>Every hour, <strong>follow-up worker</strong> finds outreach where status ∈ {sent, followed_up}, last contact ≥ 3 days ago, follow_up_count &lt; 3 → LLM drafts follow-up → sends on same thread. After 3 tries → status <code>no_response</code>.</li>
+</ol>
+
+<h2>5. MVP Scope</h2>
+<p><strong>Building:</strong> extension, dashboard, Go backend, cascade email finder (pattern+verify+Apollo), Gmail send + poll, LLM drafting, resume matching, approval gate, auto follow-ups (3× / 3 days), reply notifications, 3 requests/day, LinkedIn only, Google OAuth login.</p>
+<p><strong>Not building yet:</strong> Google Sheets export, own email finder, sentiment analysis, multi-platform, multi-tenant, payment integration.</p>
+
+<h2>6. Tech Stack</h2>
+<ul>
+<li><strong>Extension:</strong> Manifest V3, React + Vite + TypeScript, Tailwind</li>
+<li><strong>Dashboard:</strong> React + Vite + TypeScript, Tailwind, TanStack Query, TanStack Table</li>
+<li><strong>Backend:</strong> Go with Chi router, pgx for Postgres</li>
+<li><strong>Database:</strong> PostgreSQL 15+</li>
+<li><strong>Email finder:</strong> pattern generator + SMTP verifier + Apollo API (fallback)</li>
+<li><strong>Email sending / polling:</strong> Gmail API (OAuth 2.0)</li>
+<li><strong>LLM:</strong> Claude API (Anthropic SDK)</li>
+<li><strong>Auth:</strong> Google OAuth 2.0 (same consent for login + Gmail scope)</li>
+<li><strong>Realtime:</strong> Server-Sent Events for reply push</li>
+<li><strong>Hosting:</strong> Railway or Fly.io (Go binary + Postgres), dashboard served same-origin or via Vercel</li>
+</ul>
+
+<h2>7. Architecture — Layered, Interface-Driven</h2>
+<p>Every external dependency sits behind a Go interface so the concrete implementation can be swapped without touching business logic.</p>
+<ul>
+<li><code>EmailFinder</code> — orchestrated as a <code>CascadeFinder{cache, domains, patterns, verifier, apollo}</code></li>
+<li><code>DomainResolver</code> — company name → domain</li>
+<li><code>PatternGenerator</code> — {name, domain} → candidate emails</li>
+<li><code>EmailVerifier</code> — candidate → deliverable/risky/invalid</li>
+<li><code>EmailSender</code> — Gmail today, SendGrid later</li>
+<li><code>LLMService</code> — Claude today, OpenAI later</li>
+<li><code>OutreachRepo</code> — Postgres, backs the dashboard</li>
+<li><code>Notifier</code> — browser push today, email digest later</li>
+</ul>
+
+<h2>8. Database Tables (MVP)</h2>
+<ul>
+<li><strong>users</strong> — id (uuid), google_sub, email, name, gmail_refresh_token (encrypted), trial_ends_at, created_at</li>
+<li><strong>companies</strong> — id, name, domain, resolved_via (heuristic|clearbit), created_at, UNIQUE(name)</li>
+<li><strong>contacts</strong> — id, name, company_id (fk), email, linkedin_url, source (cache|pattern|apollo), verification_status (deliverable|risky|invalid|unknown), verified_at, fetched_at, UNIQUE(linkedin_url)</li>
+<li><strong>resumes</strong> — id, user_id (fk), label, storage_url, extracted_text, created_at</li>
+<li><strong>outreach</strong> — id, user_id (fk), contact_id (fk), resume_id (fk), job_description, email_subject, email_body, gmail_thread_id, status (pending_approval|sent|replied|followed_up|no_response|cancelled), sent_at, replied_at, follow_up_count (default 0), last_followed_up_at, created_at</li>
+<li><strong>replies</strong> — id, outreach_id (fk), gmail_message_id, from_email, snippet, body, received_at</li>
+<li><strong>notifications</strong> — id, user_id (fk), type (reply|quota|other), payload (jsonb), read_at, created_at</li>
+<li><strong>config</strong> — key, value (max_daily_requests=3, trial_days=3, follow_up_interval_days=3, max_follow_ups=3)</li>
+</ul>
+
+<h2>9. API Endpoints</h2>
+<h3>Auth</h3>
+<ul>
+<li><code>GET /api/auth/google</code> — start Google OAuth (login + Gmail scope)</li>
+<li><code>GET /api/auth/google/callback</code> — OAuth callback</li>
+<li><code>POST /api/auth/logout</code></li>
+<li><code>GET /api/auth/me</code> — current user + quota</li>
+</ul>
+<h3>Outreach flow</h3>
+<ul>
+<li><code>POST /api/outreach/draft</code> — {linkedin_url, name, company, headline, job_description, resume_id?} → runs cascade + drafts email → returns {outreach_id (status=pending_approval), contact, email_draft, resume_used, confidence}</li>
+<li><code>POST /api/outreach/:id/approve</code> — {edited_subject?, edited_body?} → sends via Gmail → returns {status: sent, gmail_thread_id}</li>
+<li><code>POST /api/outreach/:id/cancel</code></li>
+<li><code>GET /api/outreach</code> — list with filters (status, company, date_from, date_to, search) + pagination</li>
+<li><code>GET /api/outreach/:id</code> — detail incl. reply thread</li>
+</ul>
+<h3>Contacts</h3>
+<ul>
+<li><code>GET /api/contacts</code> — list with filters</li>
+<li><code>POST /api/contacts/verify/:id</code> — re-run verification</li>
+</ul>
+<h3>Resumes</h3>
+<ul>
+<li><code>POST /api/resumes</code> — upload + label</li>
+<li><code>GET /api/resumes</code></li>
+<li><code>DELETE /api/resumes/:id</code></li>
+</ul>
+<h3>Analytics</h3>
+<ul>
+<li><code>GET /api/analytics?window=7d|30d|90d</code> — sent/replied counts, reply rate, chart series, top companies</li>
+</ul>
+<h3>Notifications / Realtime</h3>
+<ul>
+<li><code>GET /api/notifications</code></li>
+<li><code>POST /api/notifications/:id/read</code></li>
+<li><code>GET /api/stream</code> — Server-Sent Events channel (replies + quota events)</li>
+</ul>
+<h3>Settings</h3>
+<ul>
+<li><code>GET /api/settings</code>, <code>PATCH /api/settings</code></li>
+</ul>
+
+<h2>10. Email Finder Cascade (Pillar 1) — Detail</h2>
+<ol>
+<li><strong>Cache lookup</strong> in <code>contacts</code> by <code>linkedin_url</code> or <code>(name, company_id)</code>. Return if found and <code>verification_status ≠ invalid</code>.</li>
+<li><strong>Domain resolution</strong>: check <code>companies</code>. If miss → heuristic (<code>Acme Corp → acme.com</code>) with basic MX-existence check; if that fails → Clearbit-style lookup. Cache result.</li>
+<li><strong>Pattern generation</strong>: build candidates from name + domain. Typical 6–8 formats: <code>first.last</code>, <code>flast</code>, <code>first</code>, <code>firstl</code>, <code>lastf</code>, <code>first_last</code>, <code>last.first</code>, <code>firstlast</code>.</li>
+<li><strong>Verification</strong>: for each candidate, run SMTP handshake (connect → HELO → MAIL FROM → RCPT TO → check response code). Score: <code>250 → deliverable</code>, <code>550 → invalid</code>, timeouts/greylist → <code>risky</code>. Stop at first deliverable.</li>
+<li><strong>Apollo fallback</strong>: if no deliverable pattern found → call Apollo. Verify the returned email too. Cache with <code>source='apollo'</code>.</li>
+<li><strong>Failure</strong>: return <code>email_not_found</code>. Extension shows the user "we couldn't find this recruiter's email".</li>
+</ol>
+
+<h2>11. Draft → Approve → Send (Pillar 2) — Detail</h2>
+<ul>
+<li>Draft prompt to LLM includes: recruiter name/headline/company, user's JD, chosen resume's extracted text (or resume label if not parsed), user's own name/background.</li>
+<li>Response constrained to <code>{subject, body}</code> JSON via tool use / structured output.</li>
+<li>Outreach row created with <code>status = pending_approval</code>. No Gmail call yet.</li>
+<li>Extension renders draft in an editable form. User can tweak subject/body.</li>
+<li>On approve → <code>POST /api/outreach/:id/approve</code> sends via Gmail with final subject/body → status flips to <code>sent</code>, <code>gmail_thread_id</code> stored.</li>
+<li>Pending drafts auto-expire after 24 h (cron sets status = <code>cancelled</code>) so they don't clog the dashboard.</li>
+</ul>
+
+<h2>12. Follow-Up Worker (Pillar 4)</h2>
+<p>Hourly cron. Query: <code>WHERE status IN ('sent','followed_up') AND last_contact_at &lt; now() - interval '3 days' AND follow_up_count &lt; 3</code>.</p>
+<p>For each match: (a) check Gmail thread — if new reply, mark <code>replied</code> and skip. (b) else LLM generates follow-up (context: original email, previous follow-ups, JD, follow-up number). (c) Gmail sends on same thread. (d) increment <code>follow_up_count</code>, set <code>last_followed_up_at</code>. (e) If <code>follow_up_count == 3</code>, mark <code>no_response</code>.</p>
+
+<h2>13. Reply Notifications (Pillar 5)</h2>
+<p>Every 5 min, poll Gmail for messages on tracked <code>thread_id</code>s. On new inbound message: insert into <code>replies</code>, update outreach status, insert <code>notifications</code> row, broadcast on SSE stream, push a Chrome notification via the extension's service worker.</p>
+
+<h2>14. Risks</h2>
+<ul>
+<li><strong>LinkedIn TOS:</strong> extension only reads visible DOM, no automated actions.</li>
+<li><strong>Gmail spam / reputation:</strong> 3 sends/day cap. Every email personalized. Explicit approval gate. Standard bounce handling.</li>
+<li><strong>SMTP verification accuracy:</strong> some providers (Google Workspace, Outlook) reject or catch-all all RCPTs → verification returns <code>risky</code>. Show confidence badge in the draft UI.</li>
+<li><strong>Apollo cost:</strong> cascade minimizes Apollo calls. Cache aggressively.</li>
+<li><strong>Cold email compliance (CAN-SPAM / GDPR):</strong> include opt-out line, physical address, honest sender identity. Legal review before v1.</li>
+</ul>
+
+<h2>15. Business Model</h2>
+<p>Free trial: 3 requests/day for 3 days. Then paid subscription (pricing + Stripe post-MVP). All limits configurable via <code>config</code> table.</p>
+
+<h2>16. After MVP (v2+)</h2>
+<p>Automated recruiter discovery, own email finder replacing Apollo, sentiment classification on replies, smart notifications (positive-only), multi-platform (Indeed, Glassdoor), resume auto-generation, team workspaces, Stripe integration, Google Sheets export.</p>
+
+</body></html>

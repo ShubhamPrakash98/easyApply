@@ -1,0 +1,21 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+.env.*.local
+*.log
+
+# Go
+backend/bin/
+backend/tmp/
+*.exe
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Extension build
+extension/dist/
+extension/.output/
