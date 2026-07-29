@@ -75,7 +75,8 @@ export function createApiClient(opts: ApiClientOptions) {
 
 export type ApiClient = ReturnType<typeof createApiClient>;
 
-// Shared types — expand as endpoints are added in later phases.
+// ---- Shared types (mirrors backend response shapes) ----
+
 export interface HealthResponse {
   status: "ok";
   time: string;
@@ -88,4 +89,75 @@ export interface CurrentUser {
   name: string;
   trial_ends_at: string;
   gmail_connected: boolean;
+}
+
+export type OutreachStatus =
+  | "pending_approval"
+  | "sent"
+  | "replied"
+  | "followed_up"
+  | "no_response"
+  | "cancelled";
+
+export interface CapturedProfile {
+  recruiter_name: string;
+  recruiter_headline: string;
+  company: string;
+  linkedin_url: string;
+}
+
+export interface DraftRequest extends CapturedProfile {
+  job_description: string;
+}
+
+export interface DraftResponse {
+  outreach_id: string;
+  status: OutreachStatus;
+  draft: { subject: string; body: string };
+  contact: {
+    id: string;
+    name: string;
+    email: string;
+    company: string;
+    source: string;
+    verification_status: string;
+  };
+}
+
+export interface OutreachListItem {
+  id: string;
+  status: OutreachStatus;
+  subject: string;
+  recruiter_name: string;
+  recruiter_url: string;
+  company: string;
+  sent_at: string | null;
+  created_at: string;
+  follow_up_count: number;
+}
+
+export interface OutreachDetail {
+  id: string;
+  status: OutreachStatus;
+  subject: string;
+  body: string;
+  job_description: string;
+  created_at: string;
+  sent_at: string | null;
+  gmail_thread_id: string | null;
+  follow_up_count: number;
+  contact: {
+    name: string;
+    email: string;
+    linkedin_url: string;
+    source: string;
+    verification_status: string;
+  };
+}
+
+export interface ApproveResponse {
+  id: string;
+  status: OutreachStatus;
+  gmail_thread_id: string | null;
+  sent_at: string | null;
 }

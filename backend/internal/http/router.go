@@ -15,8 +15,9 @@ import (
 )
 
 type Deps struct {
-	DB   *pgxpool.Pool
-	Auth *auth.Service
+	DB       *pgxpool.Pool
+	Auth     *auth.Service
+	Outreach *OutreachHandler
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -54,7 +55,10 @@ func NewRouter(deps Deps) http.Handler {
 			r.Use(deps.Auth.Middleware)
 			r.Get("/auth/me", deps.Auth.Me)
 			r.Post("/auth/logout", deps.Auth.Logout)
-			// Phase 2+: /outreach, /contacts, /resumes, /analytics, /notifications
+			if deps.Outreach != nil {
+				deps.Outreach.Mount(r)
+			}
+			// Phase 3+: /contacts, /resumes, /analytics, /notifications
 		})
 	})
 

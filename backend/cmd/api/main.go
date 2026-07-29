@@ -13,9 +13,15 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/shubham/oneapply/backend/internal/auth"
+	"github.com/shubham/oneapply/backend/internal/companies"
 	"github.com/shubham/oneapply/backend/internal/config"
+	"github.com/shubham/oneapply/backend/internal/contacts"
 	"github.com/shubham/oneapply/backend/internal/db"
+	"github.com/shubham/oneapply/backend/internal/finder"
+	"github.com/shubham/oneapply/backend/internal/gmail"
 	httpapi "github.com/shubham/oneapply/backend/internal/http"
+	"github.com/shubham/oneapply/backend/internal/llm"
+	"github.com/shubham/oneapply/backend/internal/outreach"
 	"github.com/shubham/oneapply/backend/internal/users"
 )
 
@@ -62,7 +68,27 @@ func main() {
 		slog.Warn("google oauth not configured — /api/auth/google will return 503 until GOOGLE_CLIENT_ID/SECRET are set")
 	}
 
-	router := httpapi.NewRouter(httpapi.Deps{DB: pool, Auth: authSvc})
+	// Phase 2: outreach service with stubbed integrations.
+	companyRepo := companies.NewRepo(pool)
+	contactRepo := contacts.NewRepo(pool)
+	outreachRepo := outreach.NewRepo(pool)
+	outreachSvc := outreach.NewService(outreach.ServiceParams{
+		Users:      userRepo,
+		Companies:  companyRepo,
+		Contacts:   contactRepo,
+		Outreach:   outreachRepo,
+		Finder:     finder.NewStubFinder(),
+		LLM:        llm.NewStubLLM(),
+		Sender:     gmail.NewStubSender(),
+		DailyLimit: 3,
+	})
+	outreachHandler := httpapi.NewOutreachHandler(outreachSvc)
+
+	router := httpapi.NewRouter(httpapi.Deps{
+		DB:       pool,
+		Auth:     authSvc,
+		Outreach: outreachHandler,
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
