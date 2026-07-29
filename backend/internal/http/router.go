@@ -3,16 +3,20 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/shubham/oneapply/backend/internal/auth"
 )
 
 type Deps struct {
-	DB *pgxpool.Pool
+	DB   *pgxpool.Pool
+	Auth *auth.Service
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -25,7 +29,11 @@ func NewRouter(deps Deps) http.Handler {
 	r.Use(middleware.Timeout(30 * time.Second))
 
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173", "chrome-extension://*"},
+		AllowOriginFunc: func(r *http.Request, origin string) bool {
+			// Dashboard (dev) + any Chrome extension origin.
+			return origin == "http://localhost:5173" ||
+				strings.HasPrefix(origin, "chrome-extension://")
+		},
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
 		AllowCredentials: true,
@@ -36,8 +44,18 @@ func NewRouter(deps Deps) http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", healthHandler(deps))
-		// Phase 1: /auth/google mounted here.
-		// Phase 2: /outreach mounted here.
+
+		// Public auth routes (OAuth redirect + callback).
+		r.Get("/auth/google", deps.Auth.StartLogin)
+		r.Get("/auth/google/callback", deps.Auth.Callback)
+
+		// Protected routes.
+		r.Group(func(r chi.Router) {
+			r.Use(deps.Auth.Middleware)
+			r.Get("/auth/me", deps.Auth.Me)
+			r.Post("/auth/logout", deps.Auth.Logout)
+			// Phase 2+: /outreach, /contacts, /resumes, /analytics, /notifications
+		})
 	})
 
 	return r

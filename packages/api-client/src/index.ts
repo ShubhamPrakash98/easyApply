@@ -38,7 +38,7 @@ export function createApiClient(opts: ApiClientOptions) {
     });
 
     if (!res.ok) {
-      let payload: { code?: string; message?: string; details?: unknown } = {};
+      let payload: { code?: string; error?: string; message?: string; details?: unknown } = {};
       try {
         payload = await res.json();
       } catch {
@@ -47,7 +47,7 @@ export function createApiClient(opts: ApiClientOptions) {
       throw new ApiError(
         res.status,
         payload.code ?? "unknown",
-        payload.message ?? res.statusText,
+        payload.error ?? payload.message ?? res.statusText,
         payload.details,
       );
     }
@@ -57,6 +57,7 @@ export function createApiClient(opts: ApiClientOptions) {
   }
 
   return {
+    baseUrl,
     get: <T>(path: string) => request<T>(path, { method: "GET" }),
     post: <T>(path: string, body?: unknown) =>
       request<T>(path, {
@@ -79,4 +80,12 @@ export interface HealthResponse {
   status: "ok";
   time: string;
   db?: "up" | "down";
+}
+
+export interface CurrentUser {
+  id: string;
+  email: string;
+  name: string;
+  trial_ends_at: string;
+  gmail_connected: boolean;
 }

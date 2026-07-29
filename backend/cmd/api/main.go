@@ -12,9 +12,11 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/shubham/oneapply/backend/internal/auth"
 	"github.com/shubham/oneapply/backend/internal/config"
 	"github.com/shubham/oneapply/backend/internal/db"
 	httpapi "github.com/shubham/oneapply/backend/internal/http"
+	"github.com/shubham/oneapply/backend/internal/users"
 )
 
 func main() {
@@ -39,7 +41,28 @@ func main() {
 	}
 	defer pool.Close()
 
-	router := httpapi.NewRouter(httpapi.Deps{DB: pool})
+	cipher, err := auth.NewCipher(cfg.TokenEncryptionKey)
+	if err != nil {
+		slog.Error("cipher init failed", "err", err)
+		os.Exit(1)
+	}
+
+	userRepo := users.NewRepo(pool)
+	oauthCfg := auth.NewGoogleOAuthConfig(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL)
+	authSvc := auth.NewService(auth.ServiceParams{
+		OAuth:        oauthCfg,
+		Users:        userRepo,
+		JWT:          auth.NewJWTSigner(cfg.JWTSecret),
+		Cipher:       cipher,
+		DashboardURL: cfg.DashboardURL,
+		CookieSecure: cfg.CookieSecure,
+	})
+
+	if cfg.GoogleClientID == "" || cfg.GoogleClientSecret == "" {
+		slog.Warn("google oauth not configured — /api/auth/google will return 503 until GOOGLE_CLIENT_ID/SECRET are set")
+	}
+
+	router := httpapi.NewRouter(httpapi.Deps{DB: pool, Auth: authSvc})
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
