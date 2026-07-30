@@ -85,6 +85,26 @@ FROM contacts WHERE id = $1
 	return c, err
 }
 
+// GetByLinkedInURL returns the cached contact for a linkedin_url or
+// ErrNotFound if we haven't seen this recruiter before. Used by the
+// CascadeFinder's Stage A (cache lookup) via an adapter in main.go.
+func (r *Repo) GetByLinkedInURL(ctx context.Context, url string) (*Contact, error) {
+	if url == "" {
+		return nil, ErrNotFound
+	}
+	const q = `
+SELECT id, name, COALESCE(company_id::text, ''), COALESCE(email, ''), COALESCE(linkedin_url, ''),
+       source, verification_status, verified_at, fetched_at, created_at
+FROM contacts WHERE linkedin_url = $1
+`
+	row := r.db.QueryRow(ctx, q, url)
+	c, err := scan(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return c, err
+}
+
 func scan(row pgx.Row) (*Contact, error) {
 	var c Contact
 	err := row.Scan(

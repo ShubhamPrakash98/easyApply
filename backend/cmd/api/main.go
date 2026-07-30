@@ -68,16 +68,28 @@ func main() {
 		slog.Warn("google oauth not configured — /api/auth/google will return 503 until GOOGLE_CLIENT_ID/SECRET are set")
 	}
 
-	// Phase 2: outreach service with stubbed integrations.
 	companyRepo := companies.NewRepo(pool)
 	contactRepo := contacts.NewRepo(pool)
 	outreachRepo := outreach.NewRepo(pool)
+
+	// Phase 3: real email cascade. LLM + sender remain stubbed until Phase 4.
+	emailFinder := finder.NewCascadeFinder(
+		contactCacheAdapter{repo: contactRepo},
+		finder.NewHeuristicDomainResolver(),
+		finder.NewDefaultPatternGenerator(),
+		finder.NewSMTPVerifier("oneapply.local", "postmaster@oneapply.local"),
+		finder.NewApolloFinder(cfg.ApolloAPIKey),
+	)
+	if cfg.ApolloAPIKey == "" {
+		slog.Warn("APOLLO_API_KEY not set — cascade will end at SMTP verification, no Apollo fallback")
+	}
+
 	outreachSvc := outreach.NewService(outreach.ServiceParams{
 		Users:      userRepo,
 		Companies:  companyRepo,
 		Contacts:   contactRepo,
 		Outreach:   outreachRepo,
-		Finder:     finder.NewStubFinder(),
+		Finder:     emailFinder,
 		LLM:        llm.NewStubLLM(),
 		Sender:     gmail.NewStubSender(),
 		DailyLimit: 3,
@@ -112,4 +124,23 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("graceful shutdown failed", "err", err)
 	}
+}
+
+// contactCacheAdapter bridges *contacts.Repo to finder.ContactCache so the
+// finder package doesn't need to import contacts (keeps deps one-directional).
+type contactCacheAdapter struct{ repo *contacts.Repo }
+
+func (a contactCacheAdapter) LookupByLinkedInURL(ctx context.Context, url string) (*finder.CachedContact, error) {
+	c, err := a.repo.GetByLinkedInURL(ctx, url)
+	if err != nil {
+		if errors.Is(err, contacts.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &finder.CachedContact{
+		Email:              c.Email,
+		Source:             c.Source,
+		VerificationStatus: c.VerificationStatus,
+	}, nil
 }

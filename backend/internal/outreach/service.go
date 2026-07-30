@@ -103,7 +103,8 @@ func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error
 		return nil, ErrEmailNotFound
 	}
 
-	// Upsert company + contact.
+	// Upsert company + contact. On a cache hit (source=cache) we skip the
+	// upsert so we don't overwrite the original source label (pattern/apollo/…).
 	var companyID string
 	if in.Company != "" {
 		co, err := s.companies.GetOrCreateByName(ctx, in.Company, fRes.CompanyDomain, "heuristic")
@@ -113,16 +114,24 @@ func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error
 		companyID = co.ID
 	}
 
-	contact, err := s.contacts.UpsertByLinkedInURL(ctx, contacts.UpsertParams{
-		Name:               in.RecruiterName,
-		CompanyID:          companyID,
-		Email:              fRes.Email,
-		LinkedInURL:        in.LinkedInURL,
-		Source:             fRes.Source,
-		VerificationStatus: fRes.VerificationStatus,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("contact upsert: %w", err)
+	var contact *contacts.Contact
+	if fRes.Source == "cache" {
+		contact, err = s.contacts.GetByLinkedInURL(ctx, in.LinkedInURL)
+		if err != nil {
+			return nil, fmt.Errorf("contact cache reload: %w", err)
+		}
+	} else {
+		contact, err = s.contacts.UpsertByLinkedInURL(ctx, contacts.UpsertParams{
+			Name:               in.RecruiterName,
+			CompanyID:          companyID,
+			Email:              fRes.Email,
+			LinkedInURL:        in.LinkedInURL,
+			Source:             fRes.Source,
+			VerificationStatus: fRes.VerificationStatus,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("contact upsert: %w", err)
+		}
 	}
 
 	// Load user (need name for LLM).
