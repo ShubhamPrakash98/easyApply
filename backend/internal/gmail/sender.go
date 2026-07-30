@@ -8,7 +8,9 @@ import (
 )
 
 // EmailSender is Pillar 2's send surface (and Pillar 5's polling surface via
-// GetReplies which arrives in Phase 6). Phase 2 uses StubSender.
+// GetReplies which arrives in Phase 6). RealSender uses the Gmail API;
+// StubSender logs and returns a fake thread_id (still handy for local dev
+// when you don't want to send actual email).
 type EmailSender interface {
 	Send(ctx context.Context, userID string, email Email) (threadID string, err error)
 	SendReply(ctx context.Context, userID string, threadID string, email Email) error
@@ -18,8 +20,11 @@ type Email struct {
 	To      string
 	Subject string
 	Body    string
-	// ReplyTo, Cc, Attachments — added in Phase 4.
+	// FromDisplayName is inserted into the From header when set.
+	FromDisplayName string
 }
+
+// ---- Stub kept for local dev / tests ----
 
 type StubSender struct{}
 
@@ -37,7 +42,7 @@ func (StubSender) Send(_ context.Context, userID string, e Email) (string, error
 	return threadID, nil
 }
 
-func (s StubSender) SendReply(ctx context.Context, userID string, threadID string, e Email) error {
+func (s StubSender) SendReply(_ context.Context, userID string, threadID string, e Email) error {
 	slog.Info("stub email reply",
 		"user_id", userID,
 		"thread_id", threadID,

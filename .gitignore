@@ -19,3 +19,6 @@ backend/tmp/
 # Extension build
 extension/dist/
 extension/.output/
+
+# Uploaded resume PDFs (Phase 4 local storage)
+data/

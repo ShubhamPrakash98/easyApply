@@ -10,6 +10,7 @@ import (
 	"github.com/shubham/oneapply/backend/internal/finder"
 	"github.com/shubham/oneapply/backend/internal/gmail"
 	"github.com/shubham/oneapply/backend/internal/llm"
+	"github.com/shubham/oneapply/backend/internal/resumes"
 	"github.com/shubham/oneapply/backend/internal/users"
 )
 
@@ -18,12 +19,14 @@ var (
 	ErrEmailNotFound = errors.New("could not find recruiter email")
 )
 
-// Service orchestrates the 5 pillars. Phase 2 wires stubs; Phase 3+ swap them.
+// Service orchestrates the 5 pillars. Phase 4 wires the real finder + LLM +
+// Gmail sender behind the same interfaces.
 type Service struct {
 	users     *users.Repo
 	companies *companies.Repo
 	contacts  *contacts.Repo
 	outreach  *Repo
+	resumes   *resumes.Repo
 	finder    finder.EmailFinder
 	llm       llm.LLMService
 	sender    gmail.EmailSender
@@ -36,6 +39,7 @@ type ServiceParams struct {
 	Companies  *companies.Repo
 	Contacts   *contacts.Repo
 	Outreach   *Repo
+	Resumes    *resumes.Repo
 	Finder     finder.EmailFinder
 	LLM        llm.LLMService
 	Sender     gmail.EmailSender
@@ -51,6 +55,7 @@ func NewService(p ServiceParams) *Service {
 		companies:  p.Companies,
 		contacts:   p.Contacts,
 		outreach:   p.Outreach,
+		resumes:    p.Resumes,
 		finder:     p.Finder,
 		llm:        p.LLM,
 		sender:     p.Sender,
@@ -59,12 +64,15 @@ func NewService(p ServiceParams) *Service {
 }
 
 type DraftInput struct {
-	UserID           string
-	RecruiterName    string
+	UserID            string
+	RecruiterName     string
 	RecruiterHeadline string
-	Company          string
-	LinkedInURL      string
-	JobDescription   string
+	Company           string
+	LinkedInURL       string
+	JobDescription    string
+	// ResumeID: if empty, the LLM picks the best match among the user's
+	// resumes. If none exist, the draft proceeds with no resume context.
+	ResumeID string
 }
 
 type DraftResult struct {
@@ -134,28 +142,78 @@ func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error
 		}
 	}
 
-	// Load user (need name for LLM).
+	// Load user (need name/email for the LLM prompt).
 	u, err := s.users.GetByID(ctx, in.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("load user: %w", err)
 	}
 
+	// Pick the resume: explicit ID > LLM match > none.
+	var chosenResume *resumes.Resume
+	if s.resumes != nil {
+		if in.ResumeID != "" {
+			r, err := s.resumes.GetForUser(ctx, in.ResumeID, in.UserID)
+			if err != nil {
+				return nil, fmt.Errorf("load resume: %w", err)
+			}
+			chosenResume = r
+		} else {
+			list, err := s.resumes.ListForUser(ctx, in.UserID)
+			if err != nil {
+				return nil, fmt.Errorf("list resumes: %w", err)
+			}
+			if len(list) == 1 {
+				chosenResume = &list[0]
+			} else if len(list) > 1 {
+				cands := make([]llm.ResumeCandidate, 0, len(list))
+				for _, r := range list {
+					cands = append(cands, llm.ResumeCandidate{
+						ID: r.ID, Label: r.Label, Text: truncate(r.ExtractedText, 2000),
+					})
+				}
+				match, err := s.llm.MatchResume(ctx, llm.MatchResumeRequest{
+					JobDescription: in.JobDescription,
+					Resumes:        cands,
+				})
+				if err == nil && match != nil {
+					for i, r := range list {
+						if r.ID == match.ResumeID {
+							chosenResume = &list[i]
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// LLM draft.
-	draft, err := s.llm.DraftEmail(ctx, llm.DraftRequest{
+	draftReq := llm.DraftRequest{
 		RecruiterName:     in.RecruiterName,
 		RecruiterHeadline: in.RecruiterHeadline,
 		Company:           in.Company,
 		JobDescription:    in.JobDescription,
 		SenderName:        firstNonEmpty(u.Name, u.Email),
-	})
+		SenderEmail:       u.Email,
+	}
+	if chosenResume != nil {
+		draftReq.ResumeText = chosenResume.ExtractedText
+		draftReq.ResumeLabel = chosenResume.Label
+	}
+	draft, err := s.llm.DraftEmail(ctx, draftReq)
 	if err != nil {
 		return nil, fmt.Errorf("llm draft: %w", err)
 	}
 
 	// Create outreach row (pending approval).
+	var resumeIDPtr *string
+	if chosenResume != nil {
+		resumeIDPtr = &chosenResume.ID
+	}
 	o, err := s.outreach.Create(ctx, CreateParams{
 		UserID:         in.UserID,
 		ContactID:      contact.ID,
+		ResumeID:       resumeIDPtr,
 		JobDescription: in.JobDescription,
 		EmailSubject:   draft.Subject,
 		EmailBody:      draft.Body,
@@ -251,4 +309,11 @@ func firstNonEmpty(vs ...string) string {
 		}
 	}
 	return ""
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

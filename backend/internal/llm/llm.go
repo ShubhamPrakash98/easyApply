@@ -6,25 +6,50 @@ import (
 	"strings"
 )
 
-// LLMService produces email drafts (and later follow-ups + resume matches).
-// Phase 2 uses StubLLM. Phase 4 lands the real Anthropic client.
+// LLMService is the abstraction the outreach service depends on. Phase 4
+// swaps StubLLM for ClaudeLLM. Both must satisfy this interface.
 type LLMService interface {
 	DraftEmail(ctx context.Context, req DraftRequest) (*Draft, error)
+	MatchResume(ctx context.Context, req MatchResumeRequest) (*ResumeMatch, error)
 }
 
+// ---- Draft ----
+
 type DraftRequest struct {
-	RecruiterName    string
+	RecruiterName     string
 	RecruiterHeadline string
-	Company          string
-	JobDescription   string
-	ResumeText       string // may be empty in Phase 2
-	SenderName       string
+	Company           string
+	JobDescription    string
+	ResumeText        string // extracted PDF text of the chosen resume; may be empty
+	ResumeLabel       string // e.g. "backend-go"
+	SenderName        string
+	SenderEmail       string
 }
 
 type Draft struct {
 	Subject string
 	Body    string
 }
+
+// ---- Resume match ----
+
+type ResumeCandidate struct {
+	ID    string
+	Label string
+	Text  string // first ~2000 chars is plenty for matching
+}
+
+type MatchResumeRequest struct {
+	JobDescription string
+	Resumes        []ResumeCandidate
+}
+
+type ResumeMatch struct {
+	ResumeID  string
+	Rationale string
+}
+
+// ---- Stub used in Phase 2/3 (fallback / tests) ----
 
 type StubLLM struct{}
 
@@ -36,7 +61,6 @@ func (StubLLM) DraftEmail(_ context.Context, req DraftRequest) (*Draft, error) {
 		role = "the role you're hiring for"
 	}
 	subject := fmt.Sprintf("Interested in %s at %s", role, orDefault(req.Company, "your team"))
-
 	first := firstName(req.RecruiterName)
 	body := strings.TrimSpace(fmt.Sprintf(`Hi %s,
 
@@ -48,7 +72,7 @@ Thanks,
 %s
 
 --
-(This is a stubbed draft. Real Claude-generated drafts land in Phase 4.)
+(Stubbed draft. Real Claude drafts land in Phase 4.)
 `,
 		orDefault(first, "there"),
 		orDefault(req.RecruiterHeadline, "your work stood out"),
@@ -56,8 +80,14 @@ Thanks,
 		orDefault(req.Company, "your team"),
 		orDefault(req.SenderName, "Me"),
 	))
-
 	return &Draft{Subject: subject, Body: body}, nil
+}
+
+func (StubLLM) MatchResume(_ context.Context, req MatchResumeRequest) (*ResumeMatch, error) {
+	if len(req.Resumes) == 0 {
+		return nil, nil
+	}
+	return &ResumeMatch{ResumeID: req.Resumes[0].ID, Rationale: "stub picked first"}, nil
 }
 
 func firstName(full string) string {

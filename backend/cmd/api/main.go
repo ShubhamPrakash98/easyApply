@@ -22,6 +22,7 @@ import (
 	httpapi "github.com/shubham/oneapply/backend/internal/http"
 	"github.com/shubham/oneapply/backend/internal/llm"
 	"github.com/shubham/oneapply/backend/internal/outreach"
+	"github.com/shubham/oneapply/backend/internal/resumes"
 	"github.com/shubham/oneapply/backend/internal/users"
 )
 
@@ -71,8 +72,10 @@ func main() {
 	companyRepo := companies.NewRepo(pool)
 	contactRepo := contacts.NewRepo(pool)
 	outreachRepo := outreach.NewRepo(pool)
+	resumeRepo := resumes.NewRepo(pool)
+	resumeStorage := resumes.NewLocalStorage("data/resumes")
 
-	// Phase 3: real email cascade. LLM + sender remain stubbed until Phase 4.
+	// Phase 3: real email cascade.
 	emailFinder := finder.NewCascadeFinder(
 		contactCacheAdapter{repo: contactRepo},
 		finder.NewHeuristicDomainResolver(),
@@ -84,22 +87,40 @@ func main() {
 		slog.Warn("APOLLO_API_KEY not set — cascade will end at SMTP verification, no Apollo fallback")
 	}
 
+	// Phase 4: real LLM + real Gmail sender.
+	var llmSvc llm.LLMService = llm.NewStubLLM()
+	if cfg.AnthropicAPIKey != "" {
+		llmSvc = llm.NewClaudeLLM(cfg.AnthropicAPIKey)
+	} else {
+		slog.Warn("ANTHROPIC_API_KEY not set — drafts will use the stubbed LLM")
+	}
+
+	tokenProvider := &auth.GmailTokenProvider{OAuth: oauthCfg, Users: userRepo, Cipher: cipher}
+	var sender gmail.EmailSender = gmail.NewRealSender(tokenProvider)
+	if cfg.GoogleClientID == "" || cfg.GoogleClientSecret == "" {
+		slog.Warn("gmail sender falling back to stub — Google OAuth not configured")
+		sender = gmail.NewStubSender()
+	}
+
 	outreachSvc := outreach.NewService(outreach.ServiceParams{
 		Users:      userRepo,
 		Companies:  companyRepo,
 		Contacts:   contactRepo,
 		Outreach:   outreachRepo,
+		Resumes:    resumeRepo,
 		Finder:     emailFinder,
-		LLM:        llm.NewStubLLM(),
-		Sender:     gmail.NewStubSender(),
+		LLM:        llmSvc,
+		Sender:     sender,
 		DailyLimit: 3,
 	})
 	outreachHandler := httpapi.NewOutreachHandler(outreachSvc)
+	resumeHandler := httpapi.NewResumeHandler(resumeRepo, resumeStorage)
 
 	router := httpapi.NewRouter(httpapi.Deps{
 		DB:       pool,
 		Auth:     authSvc,
 		Outreach: outreachHandler,
+		Resumes:  resumeHandler,
 	})
 
 	srv := &http.Server{

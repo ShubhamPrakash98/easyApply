@@ -35,6 +35,7 @@ type draftRequest struct {
 	Company           string `json:"company"`
 	LinkedInURL       string `json:"linkedin_url"`
 	JobDescription    string `json:"job_description"`
+	ResumeID          string `json:"resume_id,omitempty"`
 }
 
 type draftResponse struct {
@@ -77,6 +78,7 @@ func (h *OutreachHandler) draft(w http.ResponseWriter, r *http.Request) {
 		Company:           req.Company,
 		LinkedInURL:       req.LinkedInURL,
 		JobDescription:    req.JobDescription,
+		ResumeID:          req.ResumeID,
 	})
 	if err != nil {
 		switch {

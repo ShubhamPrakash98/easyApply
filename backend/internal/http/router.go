@@ -18,6 +18,7 @@ type Deps struct {
 	DB       *pgxpool.Pool
 	Auth     *auth.Service
 	Outreach *OutreachHandler
+	Resumes  *ResumeHandler
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -58,7 +59,10 @@ func NewRouter(deps Deps) http.Handler {
 			if deps.Outreach != nil {
 				deps.Outreach.Mount(r)
 			}
-			// Phase 3+: /contacts, /resumes, /analytics, /notifications
+			if deps.Resumes != nil {
+				deps.Resumes.Mount(r)
+			}
+			// Phase 5+: /contacts, /analytics, /notifications
 		})
 	})
 

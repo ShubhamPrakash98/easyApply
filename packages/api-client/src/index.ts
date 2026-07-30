@@ -23,7 +23,9 @@ export function createApiClient(opts: ApiClientOptions) {
     init: RequestInit = {},
   ): Promise<T> {
     const headers = new Headers(init.headers);
-    if (!headers.has("Content-Type") && init.body) {
+    // Don't set Content-Type for FormData — the browser needs to set it
+    // with the multipart boundary.
+    if (!headers.has("Content-Type") && init.body && !(init.body instanceof FormData)) {
       headers.set("Content-Type", "application/json");
     }
     if (getToken) {
@@ -64,6 +66,8 @@ export function createApiClient(opts: ApiClientOptions) {
         method: "POST",
         body: body ? JSON.stringify(body) : undefined,
       }),
+    upload: <T>(path: string, formData: FormData) =>
+      request<T>(path, { method: "POST", body: formData }),
     patch: <T>(path: string, body?: unknown) =>
       request<T>(path, {
         method: "PATCH",
@@ -160,4 +164,11 @@ export interface ApproveResponse {
   status: OutreachStatus;
   gmail_thread_id: string | null;
   sent_at: string | null;
+}
+
+export interface ResumeSummary {
+  id: string;
+  label: string;
+  created_at: string;
+  extracted_text_len: number;
 }

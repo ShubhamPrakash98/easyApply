@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@oneapply/ui";
 import {
   ApiError,
   type ApproveResponse,
   type CapturedProfile,
   type DraftResponse,
+  type ResumeSummary,
 } from "@oneapply/api-client";
 import { api } from "../lib/api";
 
@@ -12,17 +13,26 @@ type Phase = "input" | "drafting" | "review" | "sending" | "sent" | "error";
 
 interface Props {
   profile: CapturedProfile;
-  onDone: () => void; // called after send/cancel to clear the pending capture
-  onDismiss: () => void; // called to close the draft view without cancelling backend
+  onDone: () => void; // clear the pending capture
+  onDismiss: () => void; // close the draft view
 }
 
 export function DraftView({ profile, onDone, onDismiss }: Props) {
   const [phase, setPhase] = useState<Phase>("input");
   const [jd, setJd] = useState("");
+  const [resumes, setResumes] = useState<ResumeSummary[]>([]);
+  const [resumeID, setResumeID] = useState<string>(""); // "" = let AI pick
   const [draft, setDraft] = useState<DraftResponse | null>(null);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api
+      .get<{ items: ResumeSummary[] }>("/api/resumes")
+      .then((r) => setResumes(r.items))
+      .catch(() => setResumes([]));
+  }, []);
 
   async function handleDraft() {
     if (jd.trim().length < 10) {
@@ -35,6 +45,7 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
       const resp = await api.post<DraftResponse>("/api/outreach/draft", {
         ...profile,
         job_description: jd,
+        resume_id: resumeID || undefined,
       });
       setDraft(resp);
       setSubject(resp.draft.subject);
@@ -71,7 +82,7 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
       try {
         await api.post(`/api/outreach/${draft.outreach_id}/cancel`);
       } catch {
-        // best-effort — server will auto-cancel pending drafts after 24h
+        // best-effort
       }
     }
     onDone();
@@ -103,6 +114,27 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
             onChange={(e) => setJd(e.target.value)}
             disabled={phase === "drafting"}
           />
+
+          <label className="block text-xs font-medium text-gray-700">
+            Resume
+          </label>
+          <select
+            className="w-full rounded border border-gray-300 p-2 text-sm bg-white"
+            value={resumeID}
+            onChange={(e) => setResumeID(e.target.value)}
+            disabled={phase === "drafting"}
+          >
+            <option value="">Let AI pick the best match</option>
+            {resumes.map((r) => (
+              <option key={r.id} value={r.id}>{r.label}</option>
+            ))}
+          </select>
+          {resumes.length === 0 && (
+            <p className="text-xs text-gray-500">
+              No resumes uploaded yet. The email will send without a resume attached; upload one from the dashboard.
+            </p>
+          )}
+
           {error && (
             <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
               {error}
@@ -132,12 +164,12 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
 
       {(phase === "review" || phase === "sending") && draft && (
         <>
-          <div className="rounded border border-gray-200 bg-gray-50 p-2 text-xs text-gray-700">
-            To <span className="font-medium">{draft.contact.email}</span>
-            {" · "}
-            <span title={draft.contact.verification_status}>
-              {sourceLabel(draft.contact.source)}
-            </span>
+          <div className="rounded border border-gray-200 bg-gray-50 p-2 text-xs text-gray-700 space-y-1">
+            <div>To <span className="font-medium">{draft.contact.email}</span></div>
+            <div className="flex items-center gap-2">
+              <VerificationBadge status={draft.contact.verification_status} />
+              <span className="text-gray-500">source: {sourceLabel(draft.contact.source)}</span>
+            </div>
           </div>
           <label className="block text-xs font-medium text-gray-700">Subject</label>
           <input
@@ -149,7 +181,7 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
           <label className="block text-xs font-medium text-gray-700">Body</label>
           <textarea
             className="w-full rounded border border-gray-300 p-2 text-xs font-mono"
-            rows={10}
+            rows={12}
             value={body}
             onChange={(e) => setBody(e.target.value)}
             disabled={phase === "sending"}
@@ -190,16 +222,31 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
   );
 }
 
+function VerificationBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    deliverable: { label: "verified", cls: "bg-green-100 text-green-800" },
+    risky: { label: "risky (catch-all)", cls: "bg-yellow-100 text-yellow-800" },
+    invalid: { label: "invalid", cls: "bg-red-100 text-red-800" },
+    unknown: { label: "unverified", cls: "bg-gray-100 text-gray-700" },
+  };
+  const conf = map[status] ?? map.unknown;
+  return (
+    <span className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium ${conf.cls}`}>
+      {conf.label}
+    </span>
+  );
+}
+
 function sourceLabel(source: string): string {
   switch (source) {
     case "cache":
-      return "cached email";
+      return "cached";
     case "pattern":
       return "verified pattern";
     case "apollo":
       return "Apollo";
     case "stub":
-      return "stub (Phase 2)";
+      return "stub";
     default:
       return source;
   }
