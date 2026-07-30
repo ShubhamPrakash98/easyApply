@@ -7,6 +7,7 @@ import (
 
 	"github.com/shubham/oneapply/backend/internal/companies"
 	"github.com/shubham/oneapply/backend/internal/contacts"
+	"github.com/shubham/oneapply/backend/internal/features"
 	"github.com/shubham/oneapply/backend/internal/finder"
 	"github.com/shubham/oneapply/backend/internal/gmail"
 	"github.com/shubham/oneapply/backend/internal/llm"
@@ -17,6 +18,7 @@ import (
 var (
 	ErrRateLimited   = errors.New("daily rate limit exceeded")
 	ErrEmailNotFound = errors.New("could not find recruiter email")
+	ErrEmptyDraft    = errors.New("subject and body are required")
 )
 
 // Service orchestrates the 5 pillars. Phase 4 wires the real finder + LLM +
@@ -142,13 +144,19 @@ func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error
 		}
 	}
 
-	// Load user (need name/email for the LLM prompt).
+	// Load user (need name/email + subscription tier for feature checks).
 	u, err := s.users.GetByID(ctx, in.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("load user: %w", err)
 	}
+	aiDraft := features.IsEnabled(u, features.AIDraftEmail)
+	aiMatch := features.IsEnabled(u, features.AIResumeMatch)
 
-	// Pick the resume: explicit ID > LLM match > none.
+	// Pick the resume:
+	//   explicit ID  → use it
+	//   else, one resume → auto-attach
+	//   else, many resumes → LLM match (premium only), else first
+	//   else, no resumes → skip
 	var chosenResume *resumes.Resume
 	if s.resumes != nil {
 		if in.ResumeID != "" {
@@ -162,9 +170,10 @@ func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error
 			if err != nil {
 				return nil, fmt.Errorf("list resumes: %w", err)
 			}
-			if len(list) == 1 {
+			switch {
+			case len(list) == 1:
 				chosenResume = &list[0]
-			} else if len(list) > 1 {
+			case len(list) > 1 && aiMatch:
 				cands := make([]llm.ResumeCandidate, 0, len(list))
 				for _, r := range list {
 					cands = append(cands, llm.ResumeCandidate{
@@ -183,26 +192,34 @@ func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error
 						}
 					}
 				}
+			case len(list) > 1:
+				// Free tier: default to the most recent (list is DESC).
+				chosenResume = &list[0]
 			}
 		}
 	}
 
-	// LLM draft.
-	draftReq := llm.DraftRequest{
-		RecruiterName:     in.RecruiterName,
-		RecruiterHeadline: in.RecruiterHeadline,
-		Company:           in.Company,
-		JobDescription:    in.JobDescription,
-		SenderName:        firstNonEmpty(u.Name, u.Email),
-		SenderEmail:       u.Email,
-	}
-	if chosenResume != nil {
-		draftReq.ResumeText = chosenResume.ExtractedText
-		draftReq.ResumeLabel = chosenResume.Label
-	}
-	draft, err := s.llm.DraftEmail(ctx, draftReq)
-	if err != nil {
-		return nil, fmt.Errorf("llm draft: %w", err)
+	// LLM draft — premium only. Free users get an empty draft to write themselves.
+	var draft *llm.Draft
+	if aiDraft {
+		draftReq := llm.DraftRequest{
+			RecruiterName:     in.RecruiterName,
+			RecruiterHeadline: in.RecruiterHeadline,
+			Company:           in.Company,
+			JobDescription:    in.JobDescription,
+			SenderName:        firstNonEmpty(u.Name, u.Email),
+			SenderEmail:       u.Email,
+		}
+		if chosenResume != nil {
+			draftReq.ResumeText = chosenResume.ExtractedText
+			draftReq.ResumeLabel = chosenResume.Label
+		}
+		draft, err = s.llm.DraftEmail(ctx, draftReq)
+		if err != nil {
+			return nil, fmt.Errorf("llm draft: %w", err)
+		}
+	} else {
+		draft = &llm.Draft{Subject: "", Body: ""}
 	}
 
 	// Create outreach row (pending approval).
@@ -249,6 +266,9 @@ func (s *Service) Approve(ctx context.Context, in ApproveInput) (*Outreach, erro
 
 	subject := firstNonEmpty(in.FinalSubject, o.EmailSubject)
 	body := firstNonEmpty(in.FinalBody, o.EmailBody)
+	if subject == "" || body == "" {
+		return nil, ErrEmptyDraft
+	}
 
 	c, err := s.contacts.GetByID(ctx, o.ContactID)
 	if err != nil {

@@ -139,6 +139,8 @@ func (h *OutreachHandler) approve(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "outreach not found")
 		case errors.Is(err, outreach.ErrEmailNotFound):
 			writeErr(w, http.StatusConflict, "no email on contact")
+		case errors.Is(err, outreach.ErrEmptyDraft):
+			writeErr(w, http.StatusBadRequest, "subject and body are required")
 		default:
 			writeErr(w, http.StatusInternalServerError, err.Error())
 		}

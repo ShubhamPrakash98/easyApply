@@ -4,24 +4,28 @@ import {
   ApiError,
   type ApproveResponse,
   type CapturedProfile,
+  type CurrentUser,
   type DraftResponse,
   type ResumeSummary,
 } from "@oneapply/api-client";
 import { api } from "../lib/api";
 
-type Phase = "input" | "drafting" | "review" | "sending" | "sent" | "error";
+type Phase = "input" | "preparing" | "review" | "sending" | "sent" | "error";
 
 interface Props {
   profile: CapturedProfile;
+  user: CurrentUser;
   onDone: () => void; // clear the pending capture
   onDismiss: () => void; // close the draft view
 }
 
-export function DraftView({ profile, onDone, onDismiss }: Props) {
+export function DraftView({ profile, user, onDone, onDismiss }: Props) {
+  const aiDraft = user.features.ai_draft_email;
+
   const [phase, setPhase] = useState<Phase>("input");
   const [jd, setJd] = useState("");
   const [resumes, setResumes] = useState<ResumeSummary[]>([]);
-  const [resumeID, setResumeID] = useState<string>(""); // "" = let AI pick
+  const [resumeID, setResumeID] = useState<string>("");
   const [draft, setDraft] = useState<DraftResponse | null>(null);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -34,13 +38,13 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
       .catch(() => setResumes([]));
   }, []);
 
-  async function handleDraft() {
+  async function handlePrepare() {
     if (jd.trim().length < 10) {
       setError("Paste the job description first (at least 10 chars).");
       return;
     }
     setError(null);
-    setPhase("drafting");
+    setPhase("preparing");
     try {
       const resp = await api.post<DraftResponse>("/api/outreach/draft", {
         ...profile,
@@ -60,6 +64,10 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
 
   async function handleApprove() {
     if (!draft) return;
+    if (!subject.trim() || !body.trim()) {
+      setError("Subject and body are required before sending.");
+      return;
+    }
     setError(null);
     setPhase("sending");
     try {
@@ -89,6 +97,9 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
     onDismiss();
   }
 
+  const prepareLabel = aiDraft ? "Draft email" : "Find email & continue";
+  const preparingLabel = aiDraft ? "Drafting…" : "Finding email…";
+
   return (
     <div className="space-y-3">
       <div className="rounded border border-gray-200 bg-white p-3 text-sm">
@@ -101,7 +112,7 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
         )}
       </div>
 
-      {(phase === "input" || phase === "drafting" || phase === "error") && (
+      {(phase === "input" || phase === "preparing" || phase === "error") && (
         <>
           <label className="block text-xs font-medium text-gray-700">
             Job description
@@ -112,7 +123,7 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
             placeholder="Paste the JD you're reaching out about…"
             value={jd}
             onChange={(e) => setJd(e.target.value)}
-            disabled={phase === "drafting"}
+            disabled={phase === "preparing"}
           />
 
           <label className="block text-xs font-medium text-gray-700">
@@ -122,17 +133,27 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
             className="w-full rounded border border-gray-300 p-2 text-sm bg-white"
             value={resumeID}
             onChange={(e) => setResumeID(e.target.value)}
-            disabled={phase === "drafting"}
+            disabled={phase === "preparing"}
           >
-            <option value="">Let AI pick the best match</option>
+            <option value="">
+              {user.features.ai_resume_match ? "Let AI pick the best match" : "Most recent resume"}
+            </option>
             {resumes.map((r) => (
               <option key={r.id} value={r.id}>{r.label}</option>
             ))}
           </select>
           {resumes.length === 0 && (
             <p className="text-xs text-gray-500">
-              No resumes uploaded yet. The email will send without a resume attached; upload one from the dashboard.
+              No resumes uploaded yet. Upload from the dashboard so we can attach one.
             </p>
+          )}
+
+          {!aiDraft && (
+            <div className="rounded border border-indigo-200 bg-indigo-50 p-2 text-xs text-indigo-900">
+              You'll write the email yourself on the next screen.
+              <br />
+              <span className="text-indigo-700">AI-drafted emails are a Premium feature — coming soon.</span>
+            </div>
           )}
 
           {error && (
@@ -145,7 +166,7 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
               variant="secondary"
               size="sm"
               onClick={handleCancel}
-              disabled={phase === "drafting"}
+              disabled={phase === "preparing"}
             >
               Cancel
             </Button>
@@ -153,10 +174,10 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
               variant="primary"
               size="sm"
               className="flex-1"
-              onClick={handleDraft}
-              disabled={phase === "drafting"}
+              onClick={handlePrepare}
+              disabled={phase === "preparing"}
             >
-              {phase === "drafting" ? "Drafting…" : "Draft email"}
+              {phase === "preparing" ? preparingLabel : prepareLabel}
             </Button>
           </div>
         </>
@@ -171,10 +192,21 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
               <span className="text-gray-500">source: {sourceLabel(draft.contact.source)}</span>
             </div>
           </div>
+
+          {!aiDraft && (
+            <div className="rounded border border-gray-200 bg-gray-50 p-2 text-xs text-gray-700">
+              <span className="font-medium">Reference JD:</span>
+              <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-gray-600">
+                {jd}
+              </div>
+            </div>
+          )}
+
           <label className="block text-xs font-medium text-gray-700">Subject</label>
           <input
             className="w-full rounded border border-gray-300 p-2 text-sm"
             value={subject}
+            placeholder={aiDraft ? "" : "Write a subject line"}
             onChange={(e) => setSubject(e.target.value)}
             disabled={phase === "sending"}
           />
@@ -183,6 +215,7 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
             className="w-full rounded border border-gray-300 p-2 text-xs font-mono"
             rows={12}
             value={body}
+            placeholder={aiDraft ? "" : "Hi [name],\n\nWrite your email here…"}
             onChange={(e) => setBody(e.target.value)}
             disabled={phase === "sending"}
           />
@@ -205,7 +238,7 @@ export function DraftView({ profile, onDone, onDismiss }: Props) {
               size="sm"
               className="flex-1"
               onClick={handleApprove}
-              disabled={phase === "sending"}
+              disabled={phase === "sending" || !subject.trim() || !body.trim()}
             >
               {phase === "sending" ? "Sending…" : "Approve & send"}
             </Button>

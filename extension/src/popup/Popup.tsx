@@ -87,6 +87,7 @@ export function Popup() {
           {pending ? (
             <DraftView
               profile={pending.profile}
+              user={user}
               onDone={() => void clearPending()}
               onDismiss={() => window.close()}
             />

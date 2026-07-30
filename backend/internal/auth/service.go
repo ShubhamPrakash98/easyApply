@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/shubham/oneapply/backend/internal/features"
 	"github.com/shubham/oneapply/backend/internal/users"
 )
 
@@ -180,11 +181,13 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":              u.ID,
-		"email":           u.Email,
-		"name":            u.Name,
-		"trial_ends_at":   u.TrialEndsAt,
-		"gmail_connected": len(u.GmailRefreshTokenEnc) > 0,
+		"id":                u.ID,
+		"email":             u.Email,
+		"name":              u.Name,
+		"trial_ends_at":     u.TrialEndsAt,
+		"gmail_connected":   len(u.GmailRefreshTokenEnc) > 0,
+		"subscription_tier": u.SubscriptionTier,
+		"features":          features.Snapshot(u),
 	})
 }
 

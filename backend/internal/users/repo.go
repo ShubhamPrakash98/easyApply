@@ -38,7 +38,7 @@ ON CONFLICT (google_sub) DO UPDATE SET
   name       = EXCLUDED.name,
   gmail_refresh_token_enc = COALESCE(EXCLUDED.gmail_refresh_token_enc, users.gmail_refresh_token_enc),
   updated_at = NOW()
-RETURNING id, google_sub, email, name, gmail_refresh_token_enc, trial_ends_at, created_at, updated_at
+RETURNING id, google_sub, email, name, gmail_refresh_token_enc, trial_ends_at, subscription_tier, created_at, updated_at
 `
 	var refresh any = nil
 	if len(p.GmailRefreshTokenEnc) > 0 {
@@ -50,7 +50,7 @@ RETURNING id, google_sub, email, name, gmail_refresh_token_enc, trial_ends_at, c
 
 func (r *Repo) GetByID(ctx context.Context, id string) (*User, error) {
 	const q = `
-SELECT id, google_sub, email, name, gmail_refresh_token_enc, trial_ends_at, created_at, updated_at
+SELECT id, google_sub, email, name, gmail_refresh_token_enc, trial_ends_at, subscription_tier, created_at, updated_at
 FROM users WHERE id = $1
 `
 	row := r.db.QueryRow(ctx, q, id)
@@ -70,6 +70,7 @@ func scanUser(row pgx.Row) (*User, error) {
 		&u.Name,
 		&u.GmailRefreshTokenEnc,
 		&u.TrialEndsAt,
+		&u.SubscriptionTier,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	)

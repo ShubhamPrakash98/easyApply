@@ -87,12 +87,23 @@ export interface HealthResponse {
   db?: "up" | "down";
 }
 
+export type SubscriptionTier = "free" | "premium";
+
+/** Keys mirror internal/features/features.go */
+export interface FeatureFlags {
+  ai_draft_email: boolean;
+  ai_resume_match: boolean;
+  ai_followup: boolean;
+}
+
 export interface CurrentUser {
   id: string;
   email: string;
   name: string;
   trial_ends_at: string;
   gmail_connected: boolean;
+  subscription_tier: SubscriptionTier;
+  features: FeatureFlags;
 }
 
 export type OutreachStatus =
