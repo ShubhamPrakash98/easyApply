@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -121,15 +122,18 @@ func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
 
 	tok, err := s.oauth.Exchange(ctx, code)
 	if err != nil {
+		slog.Error("oauth code exchange failed", "err", err)
 		http.Error(w, "code exchange: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	info, err := FetchGoogleUserInfo(ctx, s.oauth, tok)
 	if err != nil {
+		slog.Error("google userinfo fetch failed", "err", err)
 		http.Error(w, "userinfo: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	if info.Sub == "" || info.Email == "" {
+		slog.Error("google userinfo missing sub/email", "sub_empty", info.Sub == "", "email_empty", info.Email == "")
 		http.Error(w, "userinfo missing sub/email", http.StatusBadGateway)
 		return
 	}

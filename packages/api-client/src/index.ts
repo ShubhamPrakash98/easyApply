@@ -121,22 +121,40 @@ export interface CapturedProfile {
   linkedin_url: string;
 }
 
-export interface DraftRequest extends CapturedProfile {
+export interface ContactSummary {
+  id: string;
+  name: string;
+  email: string;
+  company: string;
+  source: string;
+  verification_status: string;
+}
+
+/** POST /api/outreach/find-email — step 1 of the two-phase flow. */
+export interface FindEmailRequest {
+  recruiter_name: string;
+  company: string;
+  linkedin_url: string;
+}
+
+export interface FindEmailResponse {
+  contact: ContactSummary;
+}
+
+/** POST /api/outreach/draft — step 2. Requires contact_id from step 1. */
+export interface DraftRequest {
+  contact_id: string;
+  recruiter_headline?: string;
+  company?: string;
   job_description: string;
+  resume_id?: string;
 }
 
 export interface DraftResponse {
   outreach_id: string;
   status: OutreachStatus;
   draft: { subject: string; body: string };
-  contact: {
-    id: string;
-    name: string;
-    email: string;
-    company: string;
-    source: string;
-    verification_status: string;
-  };
+  contact: ContactSummary;
 }
 
 export interface OutreachListItem {

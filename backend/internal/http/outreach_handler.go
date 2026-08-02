@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -22,6 +23,7 @@ func NewOutreachHandler(svc *outreach.Service) *OutreachHandler {
 }
 
 func (h *OutreachHandler) Mount(r chi.Router) {
+	r.Post("/outreach/find-email", h.findEmail)
 	r.Post("/outreach/draft", h.draft)
 	r.Get("/outreach", h.list)
 	r.Get("/outreach/{id}", h.detail)
@@ -29,25 +31,12 @@ func (h *OutreachHandler) Mount(r chi.Router) {
 	r.Post("/outreach/{id}/cancel", h.cancel)
 }
 
-type draftRequest struct {
-	RecruiterName     string `json:"recruiter_name"`
-	RecruiterHeadline string `json:"recruiter_headline"`
-	Company           string `json:"company"`
-	LinkedInURL       string `json:"linkedin_url"`
-	JobDescription    string `json:"job_description"`
-	ResumeID          string `json:"resume_id,omitempty"`
-}
+// -- Step 1: Find email --
 
-type draftResponse struct {
-	OutreachID string       `json:"outreach_id"`
-	Status     string       `json:"status"`
-	Draft      draftBody    `json:"draft"`
-	Contact    contactBody  `json:"contact"`
-}
-
-type draftBody struct {
-	Subject string `json:"subject"`
-	Body    string `json:"body"`
+type findEmailRequest struct {
+	RecruiterName string `json:"recruiter_name"`
+	Company       string `json:"company"`
+	LinkedInURL   string `json:"linkedin_url"`
 }
 
 type contactBody struct {
@@ -59,6 +48,67 @@ type contactBody struct {
 	VerificationStatus string `json:"verification_status"`
 }
 
+func (h *OutreachHandler) findEmail(w http.ResponseWriter, r *http.Request) {
+	userID, _ := auth.UserIDFromContext(r.Context())
+	var req findEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if req.RecruiterName == "" {
+		writeErr(w, http.StatusBadRequest, "recruiter_name is required")
+		return
+	}
+
+	res, err := h.svc.FindContact(r.Context(), outreach.FindContactInput{
+		UserID:        userID,
+		RecruiterName: req.RecruiterName,
+		Company:       req.Company,
+		LinkedInURL:   req.LinkedInURL,
+	})
+	if err != nil {
+		if errors.Is(err, outreach.ErrEmailNotFound) {
+			writeErr(w, http.StatusNotFound, "email_not_found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"contact": contactBody{
+			ID:                 res.Contact.ID,
+			Name:               res.Contact.Name,
+			Email:              res.Contact.Email,
+			Company:            res.Company,
+			Source:             res.Contact.Source,
+			VerificationStatus: res.Contact.VerificationStatus,
+		},
+	})
+}
+
+// -- Step 2: Draft (takes contact_id from step 1) --
+
+type draftRequest struct {
+	ContactID         string `json:"contact_id"`
+	RecruiterHeadline string `json:"recruiter_headline,omitempty"`
+	Company           string `json:"company,omitempty"`
+	JobDescription    string `json:"job_description"`
+	ResumeID          string `json:"resume_id,omitempty"`
+}
+
+type draftResponse struct {
+	OutreachID string      `json:"outreach_id"`
+	Status     string      `json:"status"`
+	Draft      draftBody   `json:"draft"`
+	Contact    contactBody `json:"contact"`
+}
+
+type draftBody struct {
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
+}
+
 func (h *OutreachHandler) draft(w http.ResponseWriter, r *http.Request) {
 	userID, _ := auth.UserIDFromContext(r.Context())
 	var req draftRequest
@@ -66,17 +116,16 @@ func (h *OutreachHandler) draft(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if req.RecruiterName == "" || req.JobDescription == "" {
-		writeErr(w, http.StatusBadRequest, "recruiter_name and job_description are required")
+	if req.ContactID == "" || req.JobDescription == "" {
+		writeErr(w, http.StatusBadRequest, "contact_id and job_description are required")
 		return
 	}
 
 	res, err := h.svc.Draft(r.Context(), outreach.DraftInput{
 		UserID:            userID,
-		RecruiterName:     req.RecruiterName,
+		ContactID:         req.ContactID,
 		RecruiterHeadline: req.RecruiterHeadline,
 		Company:           req.Company,
-		LinkedInURL:       req.LinkedInURL,
 		JobDescription:    req.JobDescription,
 		ResumeID:          req.ResumeID,
 	})
@@ -272,5 +321,8 @@ func (h *OutreachHandler) detail(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
+	if status >= 500 {
+		slog.Error("http 5xx", "status", status, "msg", msg)
+	}
 	writeJSON(w, status, map[string]string{"error": msg})
 }

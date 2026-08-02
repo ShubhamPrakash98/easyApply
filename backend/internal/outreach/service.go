@@ -65,42 +65,23 @@ func NewService(p ServiceParams) *Service {
 	}
 }
 
-type DraftInput struct {
-	UserID            string
-	RecruiterName     string
-	RecruiterHeadline string
-	Company           string
-	LinkedInURL       string
-	JobDescription    string
-	// ResumeID: if empty, the LLM picks the best match among the user's
-	// resumes. If none exist, the draft proceeds with no resume context.
-	ResumeID string
+// FindContactInput is the payload for step 1 of the flow ("Find email").
+type FindContactInput struct {
+	UserID        string
+	RecruiterName string
+	Company       string
+	LinkedInURL   string
 }
 
-type DraftResult struct {
-	Outreach *Outreach
-	Contact  *contacts.Contact
-	Company  string
+type FindContactResult struct {
+	Contact *contacts.Contact
+	Company string
 }
 
-// Draft is the entry point for the extension "Reach Out" flow.
-// 1) rate-limit check
-// 2) run the finder cascade (Phase 2: stub returns first.last@heuristic.com)
-// 3) upsert company + contact
-// 4) LLM draft
-// 5) create outreach row with status=pending_approval
-// The email is NOT sent here — Approve() does that.
-func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error) {
-	// Rate limit.
-	sentToday, err := s.outreach.CountSentToday(ctx, in.UserID)
-	if err != nil {
-		return nil, fmt.Errorf("rate limit check: %w", err)
-	}
-	if sentToday >= s.dailyLimit {
-		return nil, ErrRateLimited
-	}
-
-	// Find email.
+// FindContact runs the email cascade + upserts a contact row so the caller
+// can decide whether to proceed with drafting. Cheap (no LLM), free of the
+// send rate limit. Used by POST /api/outreach/find-email.
+func (s *Service) FindContact(ctx context.Context, in FindContactInput) (*FindContactResult, error) {
 	fRes, err := s.finder.FindEmail(ctx, finder.FindEmailRequest{
 		Name:        in.RecruiterName,
 		Company:     in.Company,
@@ -113,8 +94,6 @@ func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error
 		return nil, ErrEmailNotFound
 	}
 
-	// Upsert company + contact. On a cache hit (source=cache) we skip the
-	// upsert so we don't overwrite the original source label (pattern/apollo/…).
 	var companyID string
 	if in.Company != "" {
 		co, err := s.companies.GetOrCreateByName(ctx, in.Company, fRes.CompanyDomain, "heuristic")
@@ -142,6 +121,47 @@ func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error
 		if err != nil {
 			return nil, fmt.Errorf("contact upsert: %w", err)
 		}
+	}
+	return &FindContactResult{Contact: contact, Company: in.Company}, nil
+}
+
+// DraftInput is the payload for step 2 ("Draft"). The contact must already
+// exist — callers get its ID from FindContact.
+type DraftInput struct {
+	UserID            string
+	ContactID         string
+	RecruiterHeadline string // used for LLM prompt context; not persisted
+	Company           string // used for LLM prompt context
+	JobDescription    string
+	// ResumeID: if empty, the LLM picks the best match among the user's
+	// resumes. If none exist, the draft proceeds with no resume context.
+	ResumeID string
+}
+
+type DraftResult struct {
+	Outreach *Outreach
+	Contact  *contacts.Contact
+	Company  string
+}
+
+// Draft creates the outreach row and (for premium tier) drafts an email via
+// the LLM. Enforces the daily send rate limit — even though we're not sending
+// yet, the send is the resource-limited action and we want to fail fast.
+func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error) {
+	sentToday, err := s.outreach.CountSentToday(ctx, in.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("rate limit check: %w", err)
+	}
+	if sentToday >= s.dailyLimit {
+		return nil, ErrRateLimited
+	}
+
+	contact, err := s.contacts.GetByID(ctx, in.ContactID)
+	if err != nil {
+		return nil, fmt.Errorf("load contact: %w", err)
+	}
+	if contact.Email == "" {
+		return nil, ErrEmailNotFound
 	}
 
 	// Load user (need name/email + subscription tier for feature checks).
@@ -203,7 +223,7 @@ func (s *Service) Draft(ctx context.Context, in DraftInput) (*DraftResult, error
 	var draft *llm.Draft
 	if aiDraft {
 		draftReq := llm.DraftRequest{
-			RecruiterName:     in.RecruiterName,
+			RecruiterName:     contact.Name,
 			RecruiterHeadline: in.RecruiterHeadline,
 			Company:           in.Company,
 			JobDescription:    in.JobDescription,
